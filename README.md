@@ -2,6 +2,76 @@
 
 A high-performance C++ library for filtered approximate nearest neighbor (ANN) search using hierarchical cube-based spatial partitioning. Built on HNSWlib with SIMD acceleration (AVX2).
 
+## Synthetic spatial workloads for Rust DiskANN
+
+This fork adds a standalone generator; the original CubeGraph code is retained.
+Only NumPy and Python 3 are needed, not the C++ build or any vector files:
+
+```bash
+python3 -m pip install -r scripts/requirements-diskann.txt
+python3 scripts/generate_diskann.py --num-base 1000000 --num-queries 1000
+```
+
+The two counts are the only required arguments. The default output is a **new**
+`diskann-data/` directory containing:
+
+- `data_labels.jsonl`: one label per base vector, with zero-based `doc_id`.
+- `query_predicates.jsonl`: one inclusive box predicate per query, with
+  zero-based `query_id`.
+- `manifest.json`: generation parameters, attribute names, and observed domain.
+
+For example, the JSONL records have these shapes:
+
+```json
+{"doc_id":0,"a0":0.42,"a1":0.67}
+{"query_id":0,"filter":{"$and":[{"a0":{"$gte":0.2}},{"a0":{"$lte":0.8}},{"a1":{"$gte":0.3}},{"a1":{"$lte":0.7}}]}}
+```
+
+Defaults are uniform 2D coordinates, box-volume fraction 0.01, and seed 42.
+All five original distributions and 2D/3D/4D attributes are supported:
+
+```bash
+python3 scripts/generate_diskann.py \
+  --num-base 1000000 --num-queries 1000 \
+  --dimensions 3 --distribution clustered --box-volume 0.05 \
+  --seed 123 --output-dir workloads/clustered-3d
+```
+
+`--distribution` accepts `uniform`, `normal`, `clustered`, `skewed`, or `hollow`.
+Coordinates reuse CubeGraph's generators and are rounded to float32 before
+JSON serialization. Normal/clustered coordinates are clipped; skewed uses
+Beta(0.5, 0.5); hollow uses random directions and radii in [0.2, 0.5].
+Each box has equal fractional side lengths relative to the **observed metadata
+bounding box**, with a random contained position. Bounds are float32 and inclusive.
+Unlike the original perturbed benchmark, no +/-20% side variation is applied.
+`--box-volume` must be in (0, 1]; it is a geometric-volume fraction, **not an
+exact qualifying-point fraction**, especially for nonuniform distributions.
+Float32 rounding may change the volume slightly. Constant dimensions produce
+degenerate intervals; with one base point, every box includes that point.
+Generation is reproducible with the same arguments and NumPy version, but is
+not intended to reproduce the C++ random-number sequence.
+
+Use the files as `filter_params.data_labels` and
+`filter_params.query_predicates` in the Rust DiskANN benchmark, with a
+range-capable bitmap filter path. The attribute-ID-encoded inline-beta path
+does not support `$gte`/`$lte`. These are **not** legacy C++ categorical-label
+files. Vector row `i` must correspond to `doc_id: i`, and query vector row `j`
+to `query_id: j`; no dataset-specific names or embeddings are required.
+
+This tool generates spatial metadata and filters only: it does not generate
+embeddings, query vectors, eligibility bitmaps, or nearest-neighbor ground truth.
+Those require the corresponding vector data and/or DiskANN's filtering tools.
+Metadata occupies O(base count * attribute dimension) memory; JSONL records
+are written incrementally. Existing output directories are never overwritten.
+`manifest.json` is written last; a failed write may leave an incomplete output
+directory, which must be removed or replaced with a fresh destination before retrying.
+Generated JSONL is larger than CubeGraph's binary metadata.
+
+Run the generator tests without building CubeGraph:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_generate_diskann.py' -v
+```
 
 ## Paper and reproducibility
 
